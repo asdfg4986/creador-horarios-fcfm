@@ -1,35 +1,124 @@
 import numpy as np
 from datetime import datetime
 import pandas as pd
+import re
+import requests
+from bs4 import BeautifulSoup
 
-def cargar_ramos(ruta_archivo):
-    """Lee el archivo .txt y retorna un diccionario con los ramos y sus horarios."""
+def solicitar_ramos_usuario():
+    """Pregunta al usuario qué ramos desea buscar interactivamente."""
+    print("\n" + "="*40)
+    print("CREADOR DE HORARIOS FCFM")
+    print("="*40)
+    print("Ingresa los códigos de los ramos que quieres inscribir (ej: CC3001, MA2001).")
+    print("Escribe 'listo' cuando hayas terminado.\n")
+    
+    ramos_deseados = []
+    
+    while True:
+        codigo = input("▶ Código del ramo (o 'listo'): ").strip().upper()
+        
+        # Limpiamos espacios intermedios por si escriben "CC 3001"
+        codigo = codigo.replace(" ", "")
+        
+        if codigo == 'LISTO':
+            break
+            
+        if codigo:
+            ramos_deseados.append(codigo)
+            
+    # Retornamos la lista sin duplicados usando set()
+    return list(set(ramos_deseados))
+
+def extraer_ramos_especificos(lista_codigos, semestre="20262", depto="5"):
+    """Descarga el catálogo del departamento y extrae solo los ramos solicitados por el usuario."""
     datos_ramos = {}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    
+    url = f"https://ucampus.uchile.cl/m/fcfm_catalogo/?semestre={semestre}&depto={depto}"
     
     try:
-        with open(ruta_archivo, "r", encoding="utf-8") as archivo:
-            for linea in archivo:
-                linea = linea.strip()
-                if not linea:  # Ignora líneas en blanco
-                    continue
-                    
-                partes = linea.split(" ")
-                codigo_seccion = partes[0]               # Ej: "CC4101-1"
-                codigo_ramo = codigo_seccion.split("-")[0] # Ej: "CC4101"
-                bloques_horarios = partes[1:]            # Ej: ["Ma_10:15-11:45", "Ju_10:15-11:45"]
-                
-                if codigo_ramo not in datos_ramos:
-                    datos_ramos[codigo_ramo] = {codigo_seccion: bloques_horarios}
-                else:
-                    datos_ramos[codigo_ramo][codigo_seccion] = bloques_horarios
-                    
-    except FileNotFoundError:
-        print(f"Error: No se encontró el archivo '{ruta_archivo}'.")
-        return None
-    except Exception as e:
-        print(f"Error inesperado al leer el archivo: {e}")
-        return None
+        print(f"\nConectando al catálogo de la facultad...")
+        respuesta = requests.get(url, headers=headers)
         
+        # FIX 1: Forzar la codificación a UTF-8 para que lea los tildes correctamente
+        respuesta.encoding = 'utf-8' 
+        respuesta.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"Error de conexión al catálogo: {e}")
+        return None
+
+    soup = BeautifulSoup(respuesta.text, 'html.parser')
+    
+    # FIX 2: Ampliamos el diccionario para aceptar días con y sin tilde
+    mapa_dias = {
+        "Lunes": "Lu", "Martes": "Ma", "Miércoles": "Mi", "Miercoles": "Mi",
+        "Jueves": "Ju", "Viernes": "Vi", "Sábado": "Sa", "Sabado": "Sa"
+    }
+    
+    # Expresión regular robusta para las horas
+    patron_horario = re.compile(r'(Lunes|Martes|Miércoles|Miercoles|Jueves|Viernes|Sábado|Sabado)\s+(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})', re.IGNORECASE)
+
+    print("Procesando ramos solicitados...")
+    
+    for codigo_buscado in lista_codigos:
+        # 1. Buscamos el div que tiene el ID (el que tiene el título)
+        div_titulo = soup.find('div', id=codigo_buscado)
+        
+        if not div_titulo:
+            print(f"Ramo {codigo_buscado} no encontrado (revisa que pertenezca a depto={depto}).")
+            continue
+            
+        print(f"{codigo_buscado} encontrado.")
+        datos_ramos[codigo_buscado] = {}
+        
+        # 2. EL FIX CLAVE: Subimos al contenedor principal (<div class="ramo">)
+        ramo_html = div_titulo.parent
+        
+        # 3. Ahora sí, buscamos las secciones dentro de todo el contenedor del ramo
+        filas_seccion = ramo_html.find_all('tr')
+        
+        for fila in filas_seccion:
+            id_seccion = fila.get('id')
+            if not id_seccion or not id_seccion.startswith(codigo_buscado):
+                continue
+            
+            # --- EL ARREGLO DEFINITIVO ---
+            # Ya no usamos get_text(). Convertimos TODA la fila HTML en texto y a minúsculas.
+            # Así nos saltamos los filtros y decodificaciones automáticas de BeautifulSoup.
+            html_crudo = str(fila).lower()
+            
+            # La Regex Inmortal: 
+            # \S* significa "cero o más caracteres que NO sean espacios".
+            # Buscará algo que empiece con 'mi', tenga basura en medio o no, y termine en 'rcoles'.
+            # Esto atrapa "miercoles", "miércoles", "mi&eacute;rcoles", "miÃ©rcoles", etc.
+            patron_horario = re.compile(r'(lunes|martes|mi\S*rcoles|jueves|viernes|sa\S*bado)\s+(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})')
+            
+            bloques_encontrados = patron_horario.findall(html_crudo)
+            bloques_formateados = []
+            
+            for dia, inicio, fin in set(bloques_encontrados):
+                # Como 'dia' ahora puede contener mutaciones extrañas,
+                # solo revisamos cómo empieza la palabra para asignar la columna de forma 100% segura.
+                if dia.startswith('lu'): dia_corto = 'Lu'
+                elif dia.startswith('ma'): dia_corto = 'Ma'
+                elif dia.startswith('mi'): dia_corto = 'Mi'
+                elif dia.startswith('ju'): dia_corto = 'Ju'
+                elif dia.startswith('vi'): dia_corto = 'Vi'
+                elif dia.startswith('sa'): dia_corto = 'Sa'
+                else: continue
+                
+                bloques_formateados.append(f"{dia_corto}_{inicio}-{fin}")
+            
+            if bloques_formateados:
+                datos_ramos[codigo_buscado][id_seccion] = bloques_formateados
+                
+        if not datos_ramos[codigo_buscado]:
+            del datos_ramos[codigo_buscado]
+            print(f"{codigo_buscado} sin secciones disponibles o horarios 'Por fijar'.")
+
     return datos_ramos
 
 def hay_choque(inicio_A, fin_A, inicio_B, fin_B):
@@ -107,11 +196,16 @@ def generar_matrices(combinaciones_validas, datos_ramos, dias_semana):
     ]
     
     filas = len(bloques_base) + 1
+    # Calculamos la cantidad de columnas según los días que usaremos + 1 para la columna de las horas
+    columnas = len(dias_semana) + 1 
     
     for combinacion in combinaciones_validas:
-        matriz_horario = np.zeros((filas, 6), dtype=object)
+        matriz_horario = np.zeros((filas, columnas), dtype=object)
         
-        nombres_dias = ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes"]
+        # Diccionario para traducir de "Lu" a "Lunes" en los encabezados dinámicamente
+        mapa_nombres = {"Lu": "Lunes", "Ma": "Martes", "Mi": "Miércoles", "Ju": "Jueves", "Vi": "Viernes", "Sa": "Sábado"}
+        nombres_dias = [mapa_nombres[d] for d in dias_semana]
+        
         matriz_horario[0] = [0] + nombres_dias
         
         for i, bloque in enumerate(bloques_base):
@@ -168,23 +262,29 @@ def exportar_a_excel(matrices, nombre_archivo="horarios_generados.xlsx"):
         print(f"Error inesperado al guardar el Excel: {e}")
 
 if __name__ == "__main__":
-    archivo_entrada = "horarios.txt"
     dias_validos = ["Lu", "Ma", "Mi", "Ju", "Vi"]
+    semestre_actual = "20262" # Puedes cambiarlo según necesites
     
-    print(f"Cargando datos desde {archivo_entrada}...")
-    datos_ramos = cargar_ramos(archivo_entrada)
+    # 1. Interacción con el usuario
+    ramos_elegidos = solicitar_ramos_usuario()
     
-    if datos_ramos:
-        lista_ramos = list(datos_ramos.keys())
+    if not ramos_elegidos:
+        print("No ingresaste ningún ramo. Cerrando programa.")
+    else:
+        # 2. Extracción precisa
+        datos_ramos = extraer_ramos_especificos(ramos_elegidos, semestre=semestre_actual)
         
-        print("Calculando combinaciones compatibles...")
-        combinaciones = buscar_combinaciones(datos_ramos, lista_ramos)
-        
-        if not combinaciones:
-            print("⚠️ No se encontró ninguna combinación de horario sin choques.")
-        else:
-            print(f"Se encontraron {len(combinaciones)} opciones. Generando matrices...")
-            matrices = generar_matrices(combinaciones, datos_ramos, dias_validos)
+        if datos_ramos:
+            lista_ramos = list(datos_ramos.keys())
             
-            print("Exportando...")
-            exportar_a_excel(matrices)
+            print(f"\nCalculando combinaciones compatibles para {len(lista_ramos)} ramos...")
+            combinaciones = buscar_combinaciones(datos_ramos, lista_ramos)
+            
+            if not combinaciones:
+                print("No se encontró ninguna combinación de horario sin choques para esos ramos.")
+            else:
+                print(f"Se encontraron {len(combinaciones)} opciones posibles. Generando matrices...")
+                matrices = generar_matrices(combinaciones, datos_ramos, dias_validos)
+                
+                print("Exportando...")
+                exportar_a_excel(matrices)
