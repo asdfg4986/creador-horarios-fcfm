@@ -43,7 +43,7 @@ def extraer_ramos_especificos(lista_codigos, semestre="20262", depto="5"):
         print(f"\nConectando al catálogo de la facultad...")
         respuesta = requests.get(url, headers=headers)
         
-        # FIX 1: Forzar la codificación a UTF-8 para que lea los tildes correctamente
+        # Forzar la codificación a UTF-8 para que lea los tildes correctamente
         respuesta.encoding = 'utf-8' 
         respuesta.raise_for_status()
     except requests.exceptions.RequestException as e:
@@ -52,7 +52,7 @@ def extraer_ramos_especificos(lista_codigos, semestre="20262", depto="5"):
 
     soup = BeautifulSoup(respuesta.text, 'html.parser')
     
-    # FIX 2: Ampliamos el diccionario para aceptar días con y sin tilde
+    # Ampliamos el diccionario para aceptar días con y sin tilde
     mapa_dias = {
         "Lunes": "Lu", "Martes": "Ma", "Miércoles": "Mi", "Miercoles": "Mi",
         "Jueves": "Ju", "Viernes": "Vi", "Sábado": "Sa", "Sabado": "Sa"
@@ -74,10 +74,10 @@ def extraer_ramos_especificos(lista_codigos, semestre="20262", depto="5"):
         print(f"{codigo_buscado} encontrado.")
         datos_ramos[codigo_buscado] = {}
         
-        # 2. EL FIX CLAVE: Subimos al contenedor principal (<div class="ramo">)
+        # 2. Subimos al contenedor principal (<div class="ramo">)
         ramo_html = div_titulo.parent
         
-        # 3. Ahora sí, buscamos las secciones dentro de todo el contenedor del ramo
+        # 3. Buscamos las secciones dentro de todo el contenedor del ramo
         filas_seccion = ramo_html.find_all('tr')
         
         for fila in filas_seccion:
@@ -85,15 +85,12 @@ def extraer_ramos_especificos(lista_codigos, semestre="20262", depto="5"):
             if not id_seccion or not id_seccion.startswith(codigo_buscado):
                 continue
             
-            # --- EL ARREGLO DEFINITIVO ---
-            # Ya no usamos get_text(). Convertimos TODA la fila HTML en texto y a minúsculas.
+            # Convertimos TODA la fila HTML en texto y a minúsculas.
             # Así nos saltamos los filtros y decodificaciones automáticas de BeautifulSoup.
             html_crudo = str(fila).lower()
             
-            # La Regex Inmortal: 
             # \S* significa "cero o más caracteres que NO sean espacios".
             # Buscará algo que empiece con 'mi', tenga basura en medio o no, y termine en 'rcoles'.
-            # Esto atrapa "miercoles", "miércoles", "mi&eacute;rcoles", "miÃ©rcoles", etc.
             patron_horario = re.compile(r'(lunes|martes|mi\S*rcoles|jueves|viernes|sa\S*bado)\s+(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})')
             
             bloques_encontrados = patron_horario.findall(html_crudo)
