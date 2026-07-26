@@ -320,15 +320,25 @@ def exportar_a_excel(matrices, nombre_archivo="horarios_generados.xlsx"):
         return
         
     datos_exportar = []
+
+    num_columnas = matrices[0].shape[1]
     
     for i, matriz in enumerate(matrices):
-        datos_exportar.append([f"--- OPCIÓN DE HORARIO {i+1} ---", "", "", "", "", ""])
+        # Creamos una fila vacía con el tamaño exacto necesario
+        fila_vacia = [""] * num_columnas
         
+        # Copiamos la fila vacía y le ponemos el título en la primera celda
+        fila_titulo = list(fila_vacia)
+        fila_titulo[0] = f"--- OPCIÓN DE HORARIO {i+1} ---"
+        
+        datos_exportar.append(fila_titulo)
+        
+        # Guardamos la matriz convirtiendo las filas de numpy a listas estándar de Python
         for fila in matriz:
-            datos_exportar.append(fila)
+            datos_exportar.append(fila.tolist())
             
-        datos_exportar.append(["", "", "", "", "", ""])
-        datos_exportar.append(["", "", "", "", "", ""])
+        datos_exportar.append(fila_vacia)
+        datos_exportar.append(fila_vacia)
         
     df = pd.DataFrame(datos_exportar)
     df = df.replace(0, "")
