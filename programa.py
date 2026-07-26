@@ -72,9 +72,6 @@ def obtener_todos_los_ramos(lista_codigos, semestre="20262"):
         else:
             ramos_desconocidos.append(codigo)
             
-    if ramos_desconocidos:
-        print(f"\nNo tengo mapeado el departamento para: {', '.join(ramos_desconocidos)}")
-
     datos_totales_malla = {}
     
     # 2. Llamar a la función extractora delegando la responsabilidad
@@ -85,7 +82,39 @@ def obtener_todos_los_ramos(lista_codigos, semestre="20262"):
         # Juntamos los diccionarios. El método .update() fusiona los ramos nuevos 
         # en nuestro diccionario principal de datos_totales_malla
         datos_totales_malla.update(datos_parciales)
+
+    # Búsqueda de fuerza bruta para ramos desconocidos
+    if ramos_desconocidos:
+        print("\n" + "="*50)
+        print(f"Advertencia: Iniciando BÚSQUEDA DE FUERZA BRUTA para ramos desconocidos: {', '.join(ramos_desconocidos)}")
+        print("="*50)
         
+        # Juntamos todos los IDs de departamentos que conocemos en el diccionario,
+        # set() elimina los duplicados para no buscar dos veces en el mismo ID
+        deptos_a_barrer = list(set(mapa_deptos.values()))
+        
+        # Convertimos a set para ir tachándolos rápidamente a medida que los encontremos
+        ramos_pendientes = set(ramos_desconocidos)
+        
+        for depto in deptos_a_barrer:
+            if not ramos_pendientes:
+                break  # Salida temprana si ya encontramos todos
+                
+            datos_parciales = extraer_ramos_por_depto(list(ramos_pendientes), depto, semestre)
+            
+            if datos_parciales:
+                datos_totales_malla.update(datos_parciales)
+                
+                # Tachamos los ramos que acabamos de encontrar
+                for ramo_encontrado in datos_parciales.keys():
+                    ramos_pendientes.remove(ramo_encontrado)
+
+        # Advertencia final de horario parcial si quedaron ramos sin encontrar
+        if ramos_pendientes:
+            print(" ADVERTENCIA CRÍTICA: RAMOS NO ENCONTRADOS")
+            print(f" Los siguientes códigos no existen o no tienen horarios asignados: {', '.join(ramos_pendientes)}")
+            print(" Se generará una versión PARCIAL del horario excluyendo estos ramos.")
+            
     return datos_totales_malla
 
 def extraer_ramos_por_depto(lista_codigos, depto, semestre="20262"):
