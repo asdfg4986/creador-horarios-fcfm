@@ -30,45 +30,99 @@ def solicitar_ramos_usuario():
     # Retornamos la lista sin duplicados usando set()
     return list(set(ramos_deseados))
 
-def extraer_ramos_especificos(lista_codigos, semestre="20262", depto="5"):
+def obtener_todos_los_ramos(lista_codigos, semestre="20262"):
+    """Agrupa los ramos por departamento y orquesta la descarga de datos."""
+
+    mapa_deptos = {
+        "AA": "12060003",
+        "AS": "3",
+        "CC": "5",
+        "CI": "6",
+        "CM": "306",
+        "DR": "7",
+        "EH": "8",
+        "EI": "9",
+        "FT": "9",
+        "CD": "12060002",
+        "IE": "12060002",
+        "EL": "10",
+        "FI": "13",
+        "GF": "15",
+        "GL": "16",
+        "IN": "19",
+        "MA": "21",
+        "ME": "22",
+        "MI": "23",
+        "BT": "307",
+        "IQ": "307"
+    }
+    
+    ramos_por_depto = {}
+    ramos_desconocidos = []
+    
+    # 1. Analizar y agrupar los códigos
+    for codigo in lista_codigos:
+        prefijo = codigo[:2].upper()
+        depto_id = mapa_deptos.get(prefijo)
+        
+        if depto_id:
+            if depto_id not in ramos_por_depto:
+                ramos_por_depto[depto_id] = []
+            ramos_por_depto[depto_id].append(codigo)
+        else:
+            ramos_desconocidos.append(codigo)
+            
+    if ramos_desconocidos:
+        print(f"\nNo tengo mapeado el departamento para: {', '.join(ramos_desconocidos)}")
+
+    datos_totales_malla = {}
+    
+    # 2. Llamar a la función extractora delegando la responsabilidad
+    for depto, codigos_a_buscar in ramos_por_depto.items():
+        # Delegamos el trabajo sucio al extractor estable
+        datos_parciales = extraer_ramos_por_depto(codigos_a_buscar, depto, semestre)
+        
+        # Juntamos los diccionarios. El método .update() fusiona los ramos nuevos 
+        # en nuestro diccionario principal de datos_totales_malla
+        datos_totales_malla.update(datos_parciales)
+        
+    return datos_totales_malla
+
+def extraer_ramos_por_depto(lista_codigos, depto, semestre="20262"):
     """Descarga el catálogo del departamento y extrae solo los ramos solicitados por el usuario."""
     datos_ramos = {}
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
-    
+
+    prefijos = ", ".join(sorted(set(codigo[:2].upper() for codigo in lista_codigos)))
+
     url = f"https://ucampus.uchile.cl/m/fcfm_catalogo/?semestre={semestre}&depto={depto}"
+    print(f"\nDescargando catálogo de la facultad para el departamento ({prefijos})...")
     
     try:
-        print(f"\nConectando al catálogo de la facultad...")
         respuesta = requests.get(url, headers=headers)
         
         # Forzar la codificación a UTF-8 para que lea los tildes correctamente
         respuesta.encoding = 'utf-8' 
         respuesta.raise_for_status()
     except requests.exceptions.RequestException as e:
-        print(f"Error de conexión al catálogo: {e}")
+        print(f"Error al cargar el departamento {depto}: {e}")
         return None
 
     soup = BeautifulSoup(respuesta.text, 'html.parser')
-    
-    # Ampliamos el diccionario para aceptar días con y sin tilde
-    mapa_dias = {
-        "Lunes": "Lu", "Martes": "Ma", "Miércoles": "Mi", "Miercoles": "Mi",
-        "Jueves": "Ju", "Viernes": "Vi", "Sábado": "Sa", "Sabado": "Sa"
-    }
-    
-    # Expresión regular robusta para las horas
-    patron_horario = re.compile(r'(Lunes|Martes|Miércoles|Miercoles|Jueves|Viernes|Sábado|Sabado)\s+(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})', re.IGNORECASE)
 
-    print("Procesando ramos solicitados...")
-    
+    # \S* significa "cero o más caracteres que NO sean espacios".
+    # Buscará algo que empiece con 'mi', tenga basura en medio o no, y termine en 'rcoles'.
+    patron_horario = re.compile(r'(lunes|martes|mi\S*rcoles|jueves|viernes|sa\S*bado)\s+(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})')
+    patron_control = re.compile(r'control[a-z]*\s*:.*?(?=<|&#10;|"|\n)')
+
     for codigo_buscado in lista_codigos:
         # 1. Buscamos el div que tiene el ID (el que tiene el título)
         div_titulo = soup.find('div', id=codigo_buscado)
         
         if not div_titulo:
-            print(f"Ramo {codigo_buscado} no encontrado (revisa que pertenezca a depto={depto}).")
+            print(f"Ramo {codigo_buscado} no encontrado en este departamento.")
             continue
             
         print(f"{codigo_buscado} encontrado.")
@@ -88,10 +142,10 @@ def extraer_ramos_especificos(lista_codigos, semestre="20262", depto="5"):
             # Convertimos TODA la fila HTML en texto y a minúsculas.
             # Así nos saltamos los filtros y decodificaciones automáticas de BeautifulSoup.
             html_crudo = str(fila).lower()
-            
-            # \S* significa "cero o más caracteres que NO sean espacios".
-            # Buscará algo que empiece con 'mi', tenga basura en medio o no, y termine en 'rcoles'.
-            patron_horario = re.compile(r'(lunes|martes|mi\S*rcoles|jueves|viernes|sa\S*bado)\s+(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})')
+
+            # Borra cualquier texto que empiece con "control:" o "controles:" 
+            # y se detiene al encontrar un salto de línea (&#10;), una etiqueta (<) o unas comillas (")
+            html_crudo = patron_control.sub("", html_crudo)
             
             bloques_encontrados = patron_horario.findall(html_crudo)
             bloques_formateados = []
@@ -259,7 +313,7 @@ def exportar_a_excel(matrices, nombre_archivo="horarios_generados.xlsx"):
         print(f"Error inesperado al guardar el Excel: {e}")
 
 if __name__ == "__main__":
-    dias_validos = ["Lu", "Ma", "Mi", "Ju", "Vi"]
+    dias_validos = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sa"]
     semestre_actual = "20262" # Puedes cambiarlo según necesites
     
     # 1. Interacción con el usuario
@@ -269,7 +323,7 @@ if __name__ == "__main__":
         print("No ingresaste ningún ramo. Cerrando programa.")
     else:
         # 2. Extracción precisa
-        datos_ramos = extraer_ramos_especificos(ramos_elegidos, semestre=semestre_actual)
+        datos_ramos = obtener_todos_los_ramos(ramos_elegidos, semestre=semestre_actual)
         
         if datos_ramos:
             lista_ramos = list(datos_ramos.keys())
