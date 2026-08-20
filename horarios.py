@@ -30,37 +30,11 @@ def solicitar_ramos_usuario():
     # Retornamos la lista sin duplicados usando set()
     return list(set(ramos_deseados))
 
-def obtener_todos_los_ramos(lista_codigos, semestre="20262"):
-    """Agrupa los ramos por departamento y orquesta la descarga de datos."""
-
-    mapa_deptos = {
-        "AA": "12060003",
-        "AS": "3",
-        "CC": "5",
-        "CI": "6",
-        "CM": "306",
-        "DR": "7",
-        "EH": "8",
-        "EI": "9",
-        "FT": "9",
-        "CD": "12060002",
-        "IE": "12060002",
-        "EL": "10",
-        "FI": "13",
-        "GF": "15",
-        "GL": "16",
-        "IN": "19",
-        "MA": "21",
-        "ME": "22",
-        "MI": "23",
-        "BT": "307",
-        "IQ": "307"
-    }
-    
+def clasificar_ramos(lista_codigos, mapa_deptos):
+    """Analiza los prefijos de los códigos y los agrupa por departamento."""
     ramos_por_depto = {}
     ramos_desconocidos = []
     
-    # 1. Analizar y agrupar los códigos
     for codigo in lista_codigos:
         prefijo = codigo[:2].upper()
         depto_id = mapa_deptos.get(prefijo)
@@ -72,82 +46,112 @@ def obtener_todos_los_ramos(lista_codigos, semestre="20262"):
         else:
             ramos_desconocidos.append(codigo)
             
+    return ramos_por_depto, ramos_desconocidos
+
+def obtener_todos_los_ramos(lista_codigos, semestre="20262"):
+    """Orquesta la descarga de datos utilizando enrutamiento y búsqueda de respaldo."""
+    mapa_deptos = {
+        "AA": "12060003", "AS": "3", "CC": "5", "CI": "6",
+        "CM": "306", "DR": "7", "EH": "8", "EI": "9",
+        "FT": "9", "CD": "12060002", "IE": "12060002", "EL": "10",
+        "FI": "13", "GF": "15", "GL": "16", "IN": "19",
+        "MA": "21", "ME": "22", "MI": "23", "BT": "307", "IQ": "307"
+    }
+    
+    # Delegamos la clasificación a la función experta
+    ramos_por_depto, ramos_desconocidos = clasificar_ramos(lista_codigos, mapa_deptos)
+    
     datos_totales_malla = {}
     
-    # 2. Llamar a la función extractora delegando la responsabilidad
+    # Coordinamos la descarga normal
     for depto, codigos_a_buscar in ramos_por_depto.items():
-        # Delegamos el trabajo sucio al extractor estable
         datos_parciales = extraer_ramos_por_depto(codigos_a_buscar, depto, semestre)
-        
-        # Juntamos los diccionarios. El método .update() fusiona los ramos nuevos 
-        # en nuestro diccionario principal de datos_totales_malla
-        datos_totales_malla.update(datos_parciales)
+        if datos_parciales:
+            datos_totales_malla.update(datos_parciales)
 
-    # Búsqueda de fuerza bruta para ramos desconocidos
+    # Coordinamos la búsqueda de respaldo para ramos con prefijo desconocido
     if ramos_desconocidos:
         print("\n" + "="*50)
-        print(f"Advertencia: Iniciando BÚSQUEDA DE FUERZA BRUTA para ramos desconocidos: {', '.join(ramos_desconocidos)}")
+        print(f"Iniciando BÚSQUEDA DE RESPALDO para ramos desconocidos: {', '.join(ramos_desconocidos)}")
         print("="*50)
         
-        # Juntamos todos los IDs de departamentos que conocemos en el diccionario,
-        # set() elimina los duplicados para no buscar dos veces en el mismo ID
         deptos_a_barrer = list(set(mapa_deptos.values()))
-        
-        # Convertimos a set para ir tachándolos rápidamente a medida que los encontremos
         ramos_pendientes = set(ramos_desconocidos)
         
         for depto in deptos_a_barrer:
             if not ramos_pendientes:
-                break  # Salida temprana si ya encontramos todos
+                break 
                 
             datos_parciales = extraer_ramos_por_depto(list(ramos_pendientes), depto, semestre)
             
             if datos_parciales:
                 datos_totales_malla.update(datos_parciales)
-                
-                # Tachamos los ramos que acabamos de encontrar
                 for ramo_encontrado in datos_parciales.keys():
                     ramos_pendientes.remove(ramo_encontrado)
 
-        # Advertencia final de horario parcial si quedaron ramos sin encontrar
         if ramos_pendientes:
-            print(" ADVERTENCIA CRÍTICA: RAMOS NO ENCONTRADOS")
-            print(f" Los siguientes códigos no existen o no tienen horarios asignados: {', '.join(ramos_pendientes)}")
-            print(" Se generará una versión PARCIAL del horario excluyendo estos ramos.")
+            print("\n ADVERTENCIA CRÍTICA: RAMOS NO ENCONTRADOS")
+            print(f" Los siguientes códigos no existen en los departamentos de la facultad: {', '.join(ramos_pendientes)}")
+            print(" Se generará una versión PARCIAL del horario excluyendo estos ramos.\n")
             
     return datos_totales_malla
 
-def extraer_ramos_por_depto(lista_codigos, depto, semestre="20262"):
-    """Descarga el catálogo del departamento y extrae solo los ramos solicitados por el usuario."""
-    datos_ramos = {}
+def descargar_html_departamento(depto, semestre, prefijos):
+    """Se encarga exclusivamente de la conexión HTTP y retorna el HTML crudo."""
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
-
-    prefijos = ", ".join(sorted(set(codigo[:2].upper() for codigo in lista_codigos)))
-
     url = f"https://ucampus.uchile.cl/m/fcfm_catalogo/?semestre={semestre}&depto={depto}"
     print(f"\nDescargando catálogo de la facultad para el departamento ({prefijos})...")
     
     try:
         respuesta = requests.get(url, headers=headers)
-        
-        # Forzar la codificación a UTF-8 para que lea los tildes correctamente
         respuesta.encoding = 'utf-8' 
         respuesta.raise_for_status()
+        return respuesta.text
     except requests.exceptions.RequestException as e:
         print(f"Error al cargar el departamento {depto}: {e}")
         return None
 
-    soup = BeautifulSoup(respuesta.text, 'html.parser')
+def formatear_bloques_horarios(html_crudo, patron_horario, patron_control):
+    """Limpia los controles y formatea los días a partir de un fragmento HTML."""
+    # Eliminamos los controles de la cadena
+    html_crudo = patron_control.sub("", html_crudo)
+    
+    # Extraemos los horarios
+    bloques_encontrados = patron_horario.findall(html_crudo)
+    bloques_formateados = []
+    
+    for dia, inicio, fin in set(bloques_encontrados):
+        if dia.startswith('lu'): dia_corto = 'Lu'
+        elif dia.startswith('ma'): dia_corto = 'Ma'
+        elif dia.startswith('mi'): dia_corto = 'Mi'
+        elif dia.startswith('ju'): dia_corto = 'Ju'
+        elif dia.startswith('vi'): dia_corto = 'Vi'
+        elif dia.startswith('sa'): dia_corto = 'Sa'
+        else: continue
+        
+        bloques_formateados.append(f"{dia_corto}_{inicio}-{fin}")
+        
+    return bloques_formateados
 
-    # \S* significa "cero o más caracteres que NO sean espacios".
-    # Buscará algo que empiece con 'mi', tenga basura en medio o no, y termine en 'rcoles'.
+def extraer_ramos_por_depto(lista_codigos, depto, semestre="20262"):
+    """Coordina la descarga y extracción para un departamento específico."""
+    datos_ramos = {}
+    prefijos = ", ".join(sorted(set(codigo[:2].upper() for codigo in lista_codigos)))
+
+    # Delegamos la red (I/O)
+    html_texto = descargar_html_departamento(depto, semestre, prefijos)
+    if not html_texto:
+        return {} # Retornamos diccionario vacío para que el orquestador no colapse
+
+    # Parseo
+    soup = BeautifulSoup(html_texto, 'html.parser')
+
     patron_horario = re.compile(r'(lunes|martes|mi\S*rcoles|jueves|viernes|sa\S*bado)\s+(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})')
     patron_control = re.compile(r'control[a-z]*\s*:.*?(?=<|&#10;|"|\n)')
 
     for codigo_buscado in lista_codigos:
-        # 1. Buscamos el div que tiene el ID (el que tiene el título)
         div_titulo = soup.find('div', id=codigo_buscado)
         
         if not div_titulo:
@@ -157,10 +161,7 @@ def extraer_ramos_por_depto(lista_codigos, depto, semestre="20262"):
         print(f"{codigo_buscado} encontrado.")
         datos_ramos[codigo_buscado] = {}
         
-        # 2. Subimos al contenedor principal (<div class="ramo">)
         ramo_html = div_titulo.parent
-        
-        # 3. Buscamos las secciones dentro de todo el contenedor del ramo
         filas_seccion = ramo_html.find_all('tr')
         
         for fila in filas_seccion:
@@ -168,29 +169,8 @@ def extraer_ramos_por_depto(lista_codigos, depto, semestre="20262"):
             if not id_seccion or not id_seccion.startswith(codigo_buscado):
                 continue
             
-            # Convertimos TODA la fila HTML en texto y a minúsculas.
-            # Así nos saltamos los filtros y decodificaciones automáticas de BeautifulSoup.
-            html_crudo = str(fila).lower()
-
-            # Borra cualquier texto que empiece con "control:" o "controles:" 
-            # y se detiene al encontrar un salto de línea (&#10;), una etiqueta (<) o unas comillas (")
-            html_crudo = patron_control.sub("", html_crudo)
-            
-            bloques_encontrados = patron_horario.findall(html_crudo)
-            bloques_formateados = []
-            
-            for dia, inicio, fin in set(bloques_encontrados):
-                # Como 'dia' ahora puede contener mutaciones extrañas,
-                # solo revisamos cómo empieza la palabra para asignar la columna de forma 100% segura.
-                if dia.startswith('lu'): dia_corto = 'Lu'
-                elif dia.startswith('ma'): dia_corto = 'Ma'
-                elif dia.startswith('mi'): dia_corto = 'Mi'
-                elif dia.startswith('ju'): dia_corto = 'Ju'
-                elif dia.startswith('vi'): dia_corto = 'Vi'
-                elif dia.startswith('sa'): dia_corto = 'Sa'
-                else: continue
-                
-                bloques_formateados.append(f"{dia_corto}_{inicio}-{fin}")
+            # Delegamos la limpieza de texto a nuestra función experta
+            bloques_formateados = formatear_bloques_horarios(str(fila).lower(), patron_horario, patron_control)
             
             if bloques_formateados:
                 datos_ramos[codigo_buscado][id_seccion] = bloques_formateados
@@ -353,15 +333,15 @@ def exportar_a_excel(matrices, nombre_archivo="horarios_generados.xlsx"):
 
 if __name__ == "__main__":
     dias_validos = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sa"]
-    semestre_actual = "20262" # Puedes cambiarlo según necesites
+    semestre_actual = "20262" # Cambiar segun se necesite
     
-    # 1. Interacción con el usuario
+    # Interacción con el usuario
     ramos_elegidos = solicitar_ramos_usuario()
     
     if not ramos_elegidos:
         print("No ingresaste ningún ramo. Cerrando programa.")
     else:
-        # 2. Extracción precisa
+        # Extracción precisa
         datos_ramos = obtener_todos_los_ramos(ramos_elegidos, semestre=semestre_actual)
         
         if datos_ramos:
