@@ -1,5 +1,4 @@
 # Archivos y carpetas a ignorar
-*.txt
 *.csv
 *.xlsx
 *.pyc
